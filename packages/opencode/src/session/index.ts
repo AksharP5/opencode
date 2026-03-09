@@ -235,14 +235,17 @@ export namespace Session {
     z.object({
       sessionID: Identifier.schema("session"),
       messageID: Identifier.schema("message").optional(),
+      directory: z.string().optional(),
+      permission: Info.shape.permission.optional(),
     }),
     async (input) => {
       const original = await get(input.sessionID)
       if (!original) throw new Error("session not found")
       const title = getForkedTitle(original.title)
       const session = await createNext({
-        directory: Instance.directory,
+        directory: input.directory ?? Instance.directory,
         title,
+        permission: input.permission,
       })
       const msgs = await messages({ sessionID: input.sessionID })
       const idMap = new Map<string, string>()
