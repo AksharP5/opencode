@@ -40,6 +40,11 @@ export namespace Session {
     return (isChild ? childTitlePrefix : parentTitlePrefix) + new Date().toISOString()
   }
 
+  type SessionIdentity = {
+    providerID?: string
+    modelID?: string
+  }
+
   export function isDefaultTitle(title: string) {
     return new RegExp(
       `^(${parentTitlePrefix}|${childTitlePrefix})\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$`,
@@ -47,6 +52,66 @@ export namespace Session {
   }
 
   type SessionRow = typeof SessionTable.$inferSelect
+
+  function resolveMessageIdentity(data: unknown): SessionIdentity | null {
+    if (!data || typeof data !== "object") {
+      return null
+    }
+    const record = data as Record<string, unknown>
+    const model = record.model && typeof record.model === "object" ? (record.model as Record<string, unknown>) : null
+    const providerID =
+      typeof record.providerID === "string"
+        ? record.providerID
+        : typeof model?.providerID === "string"
+          ? model.providerID
+          : undefined
+    const modelID =
+      typeof record.modelID === "string"
+        ? record.modelID
+        : typeof model?.modelID === "string"
+          ? model.modelID
+          : undefined
+    if (!providerID && !modelID) {
+      return null
+    }
+    return {
+      ...(providerID ? { providerID } : {}),
+      ...(modelID ? { modelID } : {}),
+    }
+  }
+
+  function mergeSessionIdentity(session: Info, identity: SessionIdentity | undefined): Info {
+    if (!identity) {
+      return session
+    }
+    return {
+      ...session,
+      ...(identity.providerID ? { providerID: identity.providerID } : {}),
+      ...(identity.modelID ? { modelID: identity.modelID } : {}),
+    }
+  }
+
+  function getSessionIdentityMap(sessionIDs: string[]) {
+    const ids = [...new Set(sessionIDs)]
+    const result = new Map<string, SessionIdentity>()
+    if (ids.length === 0) {
+      return result
+    }
+    const rows = Database.use((db) =>
+      db.select().from(MessageTable).where(inArray(MessageTable.session_id, ids)).orderBy(desc(MessageTable.time_created)).all(),
+    )
+    for (const row of rows) {
+      if (result.has(row.session_id)) {
+        continue
+      }
+      const identity = resolveMessageIdentity(row.data)
+      if (!identity) {
+        continue
+      }
+      result.set(row.session_id, identity)
+    }
+    return result
+  }
 
   export function fromRow(row: SessionRow): Info {
     const summary =
@@ -67,6 +132,8 @@ export namespace Session {
       workspaceID: row.workspace_id ?? undefined,
       directory: row.directory,
       parentID: row.parent_id ?? undefined,
+      providerID: undefined,
+      modelID: undefined,
       title: row.title,
       version: row.version,
       summary,
@@ -124,6 +191,8 @@ export namespace Session {
       workspaceID: z.string().optional(),
       directory: z.string(),
       parentID: Identifier.schema("session").optional(),
+      providerID: z.string().optional(),
+      modelID: z.string().optional(),
       summary: z
         .object({
           additions: z.number(),
@@ -343,7 +412,8 @@ export namespace Session {
   export const get = fn(Identifier.schema("session"), async (id) => {
     const row = Database.use((db) => db.select().from(SessionTable).where(eq(SessionTable.id, id)).get())
     if (!row) throw new NotFoundError({ message: `Session not found: ${id}` })
-    return fromRow(row)
+    const identity = getSessionIdentityMap([id]).get(id)
+    return mergeSessionIdentity(fromRow(row), identity)
   })
 
   export const share = fn(Identifier.schema("session"), async (id) => {
@@ -571,8 +641,9 @@ export namespace Session {
         .limit(limit)
         .all(),
     )
+    const identities = getSessionIdentityMap(rows.map((row) => row.id))
     for (const row of rows) {
-      yield fromRow(row)
+      yield mergeSessionIdentity(fromRow(row), identities.get(row.id))
     }
   }
 
@@ -639,9 +710,10 @@ export namespace Session {
       }
     }
 
+    const identities = getSessionIdentityMap(rows.map((row) => row.id))
     for (const row of rows) {
       const project = projects.get(row.project_id) ?? null
-      yield { ...fromRow(row), project }
+      yield { ...mergeSessionIdentity(fromRow(row), identities.get(row.id)), project }
     }
   }
 
