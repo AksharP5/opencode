@@ -2,6 +2,7 @@ import { Hono } from "hono"
 import { describeRoute, validator, resolver } from "hono-openapi"
 import z from "zod"
 import { Config } from "../../config/config"
+import { Auth } from "../../auth"
 import { Provider } from "../../provider/provider"
 import { ModelsDev } from "../../provider/models"
 import { ProviderAuth } from "../../provider/auth"
@@ -78,6 +79,73 @@ export const ProviderRoutes = lazy(() =>
       }),
       async (c) => {
         return c.json(await ProviderAuth.methods())
+      },
+    )
+    .post(
+      "/:providerID/api",
+      describeRoute({
+        summary: "Set API provider credentials",
+        description: "Store an API key for a specific AI provider.",
+        operationId: "provider.api.set",
+        responses: {
+          200: {
+            description: "Provider credentials stored",
+            content: {
+              "application/json": {
+                schema: resolver(z.boolean()),
+              },
+            },
+          },
+          ...errors(400),
+        },
+      }),
+      validator(
+        "param",
+        z.object({
+          providerID: z.string().meta({ description: "Provider ID" }),
+        }),
+      ),
+      validator(
+        "json",
+        z.object({
+          key: z.string().meta({ description: "Provider API key" }),
+        }),
+      ),
+      async (c) => {
+        const providerID = c.req.valid("param").providerID
+        const { key } = c.req.valid("json")
+        await ProviderAuth.api({ providerID, key })
+        return c.json(true)
+      },
+    )
+    .delete(
+      "/:providerID/auth",
+      describeRoute({
+        summary: "Remove provider credentials",
+        description: "Remove stored credentials for a specific AI provider.",
+        operationId: "provider.auth.remove",
+        responses: {
+          200: {
+            description: "Provider credentials removed",
+            content: {
+              "application/json": {
+                schema: resolver(z.boolean()),
+              },
+            },
+          },
+          ...errors(400),
+        },
+      }),
+      validator(
+        "param",
+        z.object({
+          providerID: z.string().meta({ description: "Provider ID" }),
+        }),
+      ),
+      async (c) => {
+        const providerID = c.req.valid("param").providerID
+        await Auth.remove(providerID)
+        return c.json(true)
       },
     )
     .post(
